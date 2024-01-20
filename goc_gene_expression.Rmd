@@ -1,0 +1,112 @@
+---
+title: "goc_gene_expression"
+author: "Antton Alberdi"
+date: "10/16/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Environment preparation
+
+```{r load_libraries, warning=FALSE, comments="", message=FALSE}
+library(edgeR)
+library(DESeq2) 
+library(ggplot2)
+library(gplots)
+library(tidyverse)
+```
+
+```{r load_data, warning=FALSE, comments="", message=FALSE}
+#Load counts
+counts <- read.table("data/counts.tsv",sep="\t",header=T,row.names=1)
+#Merge resequencing data
+counts <- counts %>%
+  mutate(C2UT01=C2UT01.1) %>%
+  mutate(C3UT02=C3UT02.1+C3UT02.2) %>%
+  mutate(C4UT03=C4UT03.1+C3UT02.2) %>%
+  mutate(C6TR01=C6TR01.1+C3UT02.2) %>%
+  mutate(C7TR02=C7TR02.1+C3UT02.2) %>%
+  mutate(C8TR03=C8TR03.1+C3UT02.2) %>%
+  select(C2UT01,C3UT02,C4UT03,C6TR01,C7TR02,C8TR03)
+head(counts)
+
+#Load metadata
+metadata <- read.table("data/metadata.tsv",sep="\t",header=T)
+head(metadata)
+```
+
+```{r dge, warning=FALSE, comments="", message=FALSE}
+#Create study design matrix
+group <- factor(c("C","C","C","T","T","T"))
+design <- model.matrix(~0+group)
+
+#Create DGE object, calculate normalisation factors and estimate dispersion parameters
+dgeObj <- DGEList(counts, group=group, lib.size=colSums(counts)) %>%
+    calcNormFactors() %>%
+    estimateGLMCommonDisp(., design) %>%
+    estimateGLMTrendedDisp(., design) %>%
+    estimateGLMTagwiseDisp(., design)
+```
+
+
+```{r mds, warning=FALSE, comments="", message=FALSE}
+plotMDS(dgeObj, 
+        method="bcv", 
+        col=as.numeric(dgeObj$samples$group ))
+
+legend("topleft",
+       as.character(unique(dgeObj$samples$group)), 
+       col=1:2, 
+       pch=20)
+```
+
+## Compare treatments
+
+First fit the data to the count model before making contrasts of interest. Then use glmLRT() with makeContrasts() to test differential expression between desired groups.
+
+```{r glm, warning=FALSE, comments="", message=FALSE}
+# Fit the linear model
+fit <- glmFit(dgeObj, design)
+
+# Compare treatments
+treatdiff <- glmLRT(fit, contrast=makeContrasts(groupC-groupT, levels=design))
+
+#Top differentiated genes
+genes_top <- rownames(topTags(treatdiff, n = 30))
+
+#Significant genes
+dt_significant <- decideTestsDGE(treatdiff, adjust.method="BH", p.value=0.05)
+genes_sign <- rownames(dgeObj)[as.logical(dt_significant)]
+
+```
+
+## Smear plot
+Plot the log-fold change (i.e. the log of the ratio of expression levels for each gene between two experimential groups) against the log-concentration (i.e. the overall average expression level for each gene across the two groups).
+
+```{r fdr_plot, warning=FALSE, comments="", message=FALSE}
+plotSmear(treatdiff, de.tags = genes_sign)
+abline( h = c( -2, 2 ), col = "blue")
+```
+
+## Hierarchical clustering on top differentiated genes
+
+```{r hclust, warning=FALSE, comments="", message=FALSE}
+# Heatmap with significant genes
+counts_sign <- dgeObj$counts[genes_sign, ]
+heatmap.2(log2(counts_sign + 1),ColSideColors=c(rep("black",3),rep("red",3)),
+          key=TRUE, 
+          trace="none", 
+          col=heat.colors(200), 
+          scale="row")
+
+# Heatmap with top30 genes
+counts_top <- dgeObj$counts[genes_top, ]
+heatmap.2(log2(counts_top + 1),ColSideColors=c(rep("black",3),rep("red",3)),
+          key=TRUE, 
+          trace="none", 
+          col=heat.colors(200), 
+          scale="row")
+```

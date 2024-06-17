@@ -1,7 +1,7 @@
 ---
 title: "goc_gene_expression"
-author: "Antton Alberdi"
-date: "10/16/2023"
+author: "Antton Alberdi & Ostaizka Aizpurua"
+date: "12/2/2024"
 output: html_document
 ---
 
@@ -9,14 +9,16 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Environment preparation
+# Environment preparation
 
 ```{r load_libraries, warning=FALSE, comments="", message=FALSE}
 library(edgeR)
 library(DESeq2) 
+library(genefilter)
 library(ggplot2)
 library(gplots)
 library(tidyverse)
+library(phyloseq)
 ```
 
 ```{r load_data, warning=FALSE, comments="", message=FALSE}
@@ -26,10 +28,10 @@ counts <- read.table("data/counts.tsv",sep="\t",header=T,row.names=1)
 counts <- counts %>%
   mutate(C2UT01=C2UT01.1) %>%
   mutate(C3UT02=C3UT02.1+C3UT02.2) %>%
-  mutate(C4UT03=C4UT03.1+C3UT02.2) %>%
-  mutate(C6TR01=C6TR01.1+C3UT02.2) %>%
-  mutate(C7TR02=C7TR02.1+C3UT02.2) %>%
-  mutate(C8TR03=C8TR03.1+C3UT02.2) %>%
+  mutate(C4UT03=C4UT03.1+C4UT03.2) %>%
+  mutate(C6TR01=C6TR01.1+C6TR01.2) %>%
+  mutate(C7TR02=C7TR02.1+C7TR02.2) %>%
+  mutate(C8TR03=C8TR03.1+C8TR03.2) %>%
   select(C2UT01,C3UT02,C4UT03,C6TR01,C7TR02,C8TR03)
 head(counts)
 
@@ -109,4 +111,66 @@ heatmap.2(log2(counts_top + 1),ColSideColors=c(rep("black",3),rep("red",3)),
           trace="none", 
           col=heat.colors(200), 
           scale="row")
+```
+
+# Deseq2
+```{r nozero_phylo, comment="", message=FALSE, warning=FALSE}
+#phyloseq object without structural zeros
+phylo_samples <- metadata %>% 
+  column_to_rownames("Sample") %>% 
+  sample_data() #convert to phyloseq sample_data object
+
+phylo_counts <- counts %>% 
+  otu_table(., taxa_are_rows = TRUE) #convert to phyloseq otu_table object
+
+physeq <- phyloseq(phylo_counts, phylo_samples)
+```
+
+```{r deseq2, comment="", echo=FALSE, message=FALSE, warning=FALSE}
+diagdds = phyloseq_to_deseq2(physeq, ~ Treatment)
+diagdds <- estimateSizeFactors(diagdds, type="poscounts",locfunc=genefilter::shorth)
+diagdds = DESeq(diagdds, test="Wald", fitType="parametric")
+diagdds.ecoli <- results(diagdds, alpha=0.01, contrast=c("Treatment", "Control", "Treatment"))
+sigtab_diagdds.ecoli <- diagdds.ecoli[which(diagdds.ecoli$padj < 0.05), ] %>% as.data.frame()
+sigtab_diagdds.ecoli
+#write.table(sigtab_diagdds.ecoli, "significat_genes.tsv")
+```
+
+## Heatmap
+```{r deseq_sig, comment="", message=FALSE, warning=FALSE, fig.height=8, fig.width=10, fig.fullwidth=TRUE}
+signif_genes <- rownames(sigtab_diagdds.ecoli)
+countsdeseq_sign <- dgeObj$counts[signif_genes, ]
+countsdeseq_sign
+```
+
+```{r deseq_plot1, comment="", message=FALSE, warning=FALSE, fig.height=8, fig.width=10, fig.fullwidth=TRUE}
+heatmap.2(log2(countsdeseq_sign + 1),ColSideColors=c(rep("black",3),rep("red",3)),
+          key=TRUE, 
+          trace="none", 
+          col=heat.colors(200), 
+          scale="row",
+          cexRow=1,
+          cexCol = 1)
+```
+
+## Plot (Treatment vs. Control)
+```{r deseq_plot2, comment="", message=FALSE}
+sigtab_diagdds.ecoli %>%
+mutate(Color = ifelse(log2FoldChange <0, "Treatment","Control"))%>% 
+  rownames_to_column(., "genes")%>% 
+#  ggplot(aes(x=genes, y=log2FoldChange)) + 
+  ggplot(aes(x=forcats::fct_reorder(genes,log2FoldChange), y=log2FoldChange, fill=Color)) + 
+  geom_col()  + 
+  scale_fill_manual(values=c("#e5bd5b", "#6b7398")) + 
+  geom_hline(yintercept=0) + 
+  coord_flip()+
+  theme(axis.text = element_text(size = 8),
+        axis.title = element_text(size = 12),
+        legend.position = "right", 
+        legend.title = element_blank(),
+        panel.background = element_blank(),
+          panel.grid.major = element_line(size = 0.15, linetype = 'solid',
+                                colour = "grey"))+
+  xlab("Genes") + 
+  ylab("log2FoldChange")
 ```
